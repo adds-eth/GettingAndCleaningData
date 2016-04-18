@@ -1,0 +1,101 @@
+## Place script in same directory as "UCI HAR Dataset" folder
+
+packages = c("data.table", "reshape2", "markdown", "knitr")
+sapply(packages, require, character.only=TRUE, quietly=TRUE)
+
+##Create data path
+path = file.path(getwd(),"UCI HAR Dataset")
+
+##read files
+trainSubjects = fread(file.path(path,"train","subject_train.txt"))
+testSubjects = fread(file.path(path,"test","subject_test.txt"))
+
+trainActivities = fread(file.path(path,"train","Y_train.txt"))
+testActivities = fread(file.path(path,"test","Y_test.txt"))
+
+trainData = fread(file.path(path,"train","X_train.txt"))
+testData = fread(file.path(path,"test","X_test.txt"))
+
+##
+## Ask 1 - Merge data sets
+##
+dtSubjects = rbind(trainSubjects,testSubjects)
+setnames(dtSubjects,"V1","subjectNum")
+dtActivities = rbind(trainActivities,testActivities)
+setnames(dtActivities,"V1","activityNum")
+data = rbind(trainData,testData)
+
+dt = cbind(dtSubjects,dtActivities,data)
+setkey(dt, subjectNum, activityNum)
+
+##
+## Ask 2 - Extract only mean and stdev
+##
+features = fread(file.path(path,"features.txt"))
+setnames(features,names(features),c("featureNum","featureName"))
+
+features = features[grepl("mean\\(\\)|std\\(\\)",featureName)]
+features$featureMatch = features[,paste0("V",featureNum)]
+
+subset = c(key(dt), features$featureMatch)
+dt = dt[, subset, with=FALSE]
+
+##
+## Ask 3 - Name activities
+##
+activities = fread(file.path(path,"activity_labels.txt"))
+setnames(activities,names(activities),c("activityNum","activityName"))
+
+dt = merge(dt,activities,by = "activityNum",all.x = TRUE)
+setkey(dt, subjectNum, activityNum, activityName)
+
+dt = data.table(melt(dt,key(dt),variable.name = "featureMatch"))
+dt = merge(dt, features[, list(featureNum, featureMatch, featureName)], by="featureMatch", all.x=TRUE)
+
+dt$activity = factor(dt$activityName)
+dt$feature = factor(dt$featureName)
+
+##
+## Ask 4 - Appropriate labels and variable names
+##
+grepthis = function (regex) {
+        grepl(regex, dt$feature)
+}
+## 1 category features
+dt$featJerk = factor(grepthis("Jerk"), labels=c(NA, "Jerk"))
+dt$featMagnitude = factor(grepthis("Mag"), labels=c(NA, "Magnitude"))
+## 2 category features
+n = 2
+y = matrix(seq(1, n), nrow=n)
+x = matrix(c(grepthis("^t"), grepthis("^f")), ncol=nrow(y))
+dt$featDomain = factor(x %*% y, labels=c("Time", "Freq"))
+x = matrix(c(grepthis("Acc"), grepthis("Gyro")), ncol=nrow(y))
+dt$featInstrument = factor(x %*% y, labels=c("Accelerometer", "Gyroscope"))
+x = matrix(c(grepthis("BodyAcc"), grepthis("GravityAcc")), ncol=nrow(y))
+dt$featAcceleration = factor(x %*% y, labels=c(NA, "Body", "Gravity"))
+x = matrix(c(grepthis("mean()"), grepthis("std()")), ncol=nrow(y))
+dt$featVariable = factor(x %*% y, labels=c("Mean", "SD"))
+## 3 category features
+n = 3
+y = matrix(seq(1, n), nrow=n)
+x = matrix(c(grepthis("-X"), grepthis("-Y"), grepthis("-Z")), ncol=nrow(y))
+dt$featAxis = factor(x %*% y, labels=c(NA, "X", "Y", "Z"))
+
+setkey(dt, subjectNum, activity, featDomain, featAcceleration, featInstrument, 
+       featJerk, featMagnitude, featVariable, featAxis)
+
+##
+## Ask 5 - Independent data set with averages
+##
+finalData = dt[, list(count = .N, average = mean(value)), by=key(dt)]
+View(finalData)
+
+        ##save as text file
+f <- file.path(getwd(), "HumanActivityRecognitionData.txt")
+write.table(finalData, f, quote=FALSE, sep="\t", row.names=FALSE)
+
+##
+## Create codebook
+##
+knit("makeCodebook.Rmd", output="codebook.md", quiet=TRUE)
+markdownToHTML("codebook.md", "codebook.html")
